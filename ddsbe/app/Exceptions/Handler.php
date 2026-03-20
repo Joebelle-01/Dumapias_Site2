@@ -3,18 +3,16 @@ namespace App\Exceptions;
 
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
-use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Validation\ValidationException;
 use Laravel\Lumen\Exceptions\Handler as ExceptionHandler;
 use Symfony\Component\HttpKernel\Exception\HttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
 use Throwable;
-use App\Traits\ApiResponse;  // Add this
 
 class Handler extends ExceptionHandler
 {
-    use ApiResponse;  // Add this
-    
     /**
      * A list of the exception types that should not be reported.
      *
@@ -29,8 +27,6 @@ class Handler extends ExceptionHandler
 
     /**
      * Report or log an exception.
-     *
-     * This is a great spot to send exceptions to Sentry, Bugsnag, etc.
      *
      * @param  \Throwable  $exception
      * @return void
@@ -49,40 +45,66 @@ class Handler extends ExceptionHandler
      */
     public function render($request, Throwable $exception)
     {
-        // HTTP not found
-        if ($exception instanceof HttpException) {
-            $code = $exception->getStatusCode();
-            $message = Response::$statusTexts[$code];
-            return $this->errorResponse($message, $code);
-        }
-        
-        // Model not found
-        if ($exception instanceof ModelNotFoundException) {
-            $model = strtolower(class_basename($exception->getModel()));
-            return $this->errorResponse("Does not exist any instance of {$model} with the given id", Response::HTTP_NOT_FOUND);
+        // HTTP Not Found (404)
+        if ($exception instanceof NotFoundHttpException) {
+            return response()->json([
+                'error' => 'URL not found',
+                'code' => 404
+            ], 404);
         }
 
-        // Validation exception
+        // Method Not Allowed (405)
+        if ($exception instanceof MethodNotAllowedHttpException) {
+            return response()->json([
+                'error' => 'Method not allowed',
+                'code' => 405
+            ], 405);
+        }
+
+        // Model Not Found (e.g., User not found)
+        if ($exception instanceof ModelNotFoundException) {
+            $modelName = class_basename($exception->getModel());
+            return response()->json([
+                'error' => "{$modelName} not found with the given ID",
+                'code' => 404
+            ], 404);
+        }
+
+        // Validation Exception (422)
         if ($exception instanceof ValidationException) {
             $errors = $exception->validator->errors()->getMessages();
-            return $this->errorResponse($errors, Response::HTTP_UNPROCESSABLE_ENTITY);
+            return response()->json([
+                'error' => 'Validation failed',
+                'details' => $errors,
+                'code' => 422
+            ], 422);
         }
 
-        // Access forbidden
+        // Authorization Exception (403)
         if ($exception instanceof AuthorizationException) {
-            return $this->errorResponse($exception->getMessage(), Response::HTTP_FORBIDDEN);
-        }
-        // Unauthorized access
-        if ($exception instanceof AuthenticationException) {
-            return $this->errorResponse($exception->getMessage(), Response::HTTP_UNAUTHORIZED);
+            return response()->json([
+                'error' => $exception->getMessage() ?: 'Forbidden',
+                'code' => 403
+            ], 403);
         }
 
-        // If in development environment, show detailed error
+        // HTTP Exceptions (other HTTP errors)
+        if ($exception instanceof HttpException) {
+            return response()->json([
+                'error' => $exception->getMessage() ?: 'HTTP Error',
+                'code' => $exception->getStatusCode()
+            ], $exception->getStatusCode());
+        }
+
+        // If in debug mode, return the default error (for development)
         if (env('APP_DEBUG', false)) {
             return parent::render($request, $exception);
         }
 
-        // Unexpected error
-        return $this->errorResponse('Unexpected error. Try later', Response::HTTP_INTERNAL_SERVER_ERROR);
+        // For any other exception in production
+        return response()->json([
+            'error' => 'Unexpected error occurred',
+            'code' => 500
+        ], 500);
     }
 }
